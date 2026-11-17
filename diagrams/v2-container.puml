@@ -1,0 +1,49 @@
+@startuml v2-container
+!include <C4/C4_Container>
+LAYOUT_LEFT_RIGHT()
+skinparam defaultFontName "Segoe UI"
+skinparam wrapWidth 180
+skinparam nodesep 35
+skinparam ranksep 55
+skinparam dpi 150
+UpdateLegendTitle("Легенда")
+UpdateElementStyle("person", $legendText="пользователь", $shape=RoundedBoxShape())
+UpdateElementStyle("container", $legendText="контейнер платформы", $shape=RoundedBoxShape())
+UpdateElementStyle("external_system", $legendText="внешняя система", $shape=RoundedBoxShape())
+UpdateBoundaryStyle("system", $type="проектируемая система", $legendText="граница платформы")
+title Вариант 2: долговременный workflow (C4 Container)
+
+System_Ext(bank, "Сервисы банка", "Операция и outbox в одной транзакции")
+Person(client, "Клиент банка", "Получает сообщения и подтверждает push")
+System_Boundary(platform, "Notification Platform") {
+  Container(api, "API платформы", "Python, FastAPI", "Приёмка, настройки и история")
+  Container(relay, "Relay", "Python", "Запускает workflow, передаёт Signals")
+  Container(callback, "Приём подтверждений", "Python, FastAPI", "Проверяет ACK, пишет inbox и DeliveryGate")
+  ContainerDb(appDb, "БД платформы", "PostgreSQL, HA", "Ledger, попытки, DeliveryGate, inbox, проекция")
+  Container(temporal, "Движок workflow", "Temporal Server, HA", "История, durable timers, Task Queues")
+  ContainerDb(history, "Persistence Temporal", "Отдельный PostgreSQL, HA", "История исполнения и таймеры")
+  Container(workers, "Критичные workers", "Python, Temporal SDK", "Workflow управляет маршрутом, Activity отправляет")
+  ContainerQueue(bulk, "Массовый брокер", "RabbitMQ, 3 узла", "Кампании и сервисные сообщения")
+  Container(bulkWorkers, "Массовые адаптеры", "Python, HTTPS", "Отдельные исполнители и квоты")
+}
+System_Ext(providers, "Push / SMS / email", "FCM/APNs; по два SMS/email-провайдера")
+
+Rel(bank, api, "Передаёт событие с ключом", "HTTPS")
+Rel(api, appDb, "Фиксирует приёмку и outbox", "SQL, транзакция")
+Rel(relay, appDb, "Читает outbox и callback inbox", "SQL")
+Rel(relay, temporal, "StartWorkflow / Signal", "gRPC, TLS")
+Rel(temporal, history, "Сохраняет историю и таймеры", "SQL")
+Rel(workers, temporal, "Получает задачи, возвращает результат", "gRPC, TLS")
+Rel(workers, appDb, "Activity проверяет DeliveryGate и попытку", "SQL, транзакция")
+Rel(workers, providers, "Activity отправляет с устойчивым ключом", "HTTPS")
+Rel(providers, callback, "Delivery report", "HTTPS, асинхронно")
+Rel(client, callback, "ACK приложения", "HTTPS, асинхронно")
+Rel(callback, appDb, "Inbox + stop_requested до Signal", "SQL, транзакция")
+Rel(providers, client, "Доставляет сообщение", "push / SMS / email")
+Rel(relay, bulk, "Публикует массовые задания", "AMQP, асинхронно")
+Rel(bulk, bulkWorkers, "Выдаёт задания", "AMQP")
+Rel(bulkWorkers, appDb, "Настройки и журнал попыток", "SQL")
+Rel(bulkWorkers, providers, "Отправляет в пределах квоты", "HTTPS")
+
+SHOW_LEGEND()
+@enduml

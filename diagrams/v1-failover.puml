@@ -1,0 +1,48 @@
+@startuml v1-failover
+skinparam defaultFontName "Segoe UI"
+skinparam backgroundColor white
+skinparam sequenceMessageAlign center
+skinparam maxMessageSize 170
+skinparam ParticipantBackgroundColor #EAF2FB
+skinparam ParticipantBorderColor #3779B9
+skinparam ArrowColor #375C7E
+skinparam dpi 150
+hide footbox
+autonumber
+title Вариант 1: failover на SMS и поздний ACK
+participant "Координатор /\ncallback API" as App
+database "PostgreSQL" as DB
+participant "Адаптер" as Worker
+participant "Push-провайдер" as Push
+participant "SMS-провайдер" as SMS
+actor "Клиент" as User
+
+Worker -> Push: Попытка push
+Push --> Worker: Ответ потерян
+Worker -> DB: UNKNOWN, не DELIVERED
+... прошло до 5 секунд от приёмки ...
+App -> DB: Выбрать истёкший таймер, заблокировать запись
+DB --> App: Подтверждения нет
+App -> DB: Новая версия маршрута, SMS READY + outbox
+note over App, Worker: Задание SMS приходит через relay и RabbitMQ
+alt ACK push получен до разрешения SMS
+  User -> App: ACK push
+  App -> DB: Транзакция: DELIVERED, отменить SMS READY
+  Worker -> DB: Проверить и начать SMS
+  DB --> Worker: Запрещено, уже DELIVERED
+else SMS перешла в SENDING раньше ACK
+  Worker -> DB: Атомарно READY → SENDING, версия актуальна
+  DB --> Worker: Разрешено
+  Worker -> SMS: Отправить SMS
+  SMS --> Worker: Принято, provider_message_id
+  SMS -> User: SMS
+  SMS -> App: Положительный delivery report
+  App -> DB: Inbox + DELIVERED, отменить будущие попытки
+  User -> App: Поздний ACK push, если он всё же пришёл
+  App -> DB: Записать позднее подтверждение, не создавать отправок
+  note over SMS, User
+  Уже отправленную SMS отозвать нельзя.
+  При позднем push возможны два видимых сообщения.
+  end note
+end
+@enduml

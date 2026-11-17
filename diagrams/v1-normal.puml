@@ -1,0 +1,49 @@
+@startuml v1-normal
+skinparam defaultFontName "Segoe UI"
+skinparam backgroundColor white
+skinparam sequenceMessageAlign center
+skinparam maxMessageSize 170
+skinparam ParticipantBackgroundColor #EAF2FB
+skinparam ParticipantBorderColor #3779B9
+skinparam ArrowColor #375C7E
+skinparam dpi 150
+hide footbox
+autonumber
+title Вариант 1: основная доставка push
+participant "Сервис банка" as Bank
+participant "API /\nкоординатор" as App
+database "PostgreSQL" as DB
+queue "Критичный\nRabbitMQ" as MQ
+participant "Адаптер" as Worker
+participant "Push-провайдер" as Push
+actor "Приложение\nклиента" as User
+
+Bank -> Bank: Операция + outbox одной транзакцией
+Bank -> App: Событие и стабильный ключ
+App -> DB: Транзакция: notification + ledger + outbox
+DB --> App: COMMIT с синхронной репликацией
+App --> Bank: 202, notification_id
+App -> MQ: Relay публикует сохранённое задание
+MQ --> App: Publisher confirm
+App -> DB: Отметить публикацию
+MQ -> App: Задание нового уведомления
+App -> DB: Транзакция: маршрут push, попытка READY, outbox
+App -> MQ: Consumer ACK после COMMIT
+App -> MQ: Relay публикует попытку push
+MQ --> App: Publisher confirm
+MQ -> Worker: attempt_id
+Worker -> DB: Проверка статуса / версии; READY → SENDING
+DB --> Worker: Отправка разрешена
+Worker -> Push: Отправить, прежний ключ при безопасном retry
+Push --> Worker: Принято, provider_message_id
+Worker -> DB: Принято провайдером, ожидаем ACK
+Worker -> MQ: Consumer ACK после сохранения
+Push -> User: Push с notification_id
+User -> App: Подтверждённый ACK приложения
+App -> DB: Inbox + DELIVERED + отмена READY, одна транзакция
+App --> User: 2xx после COMMIT
+note over App, DB
+Publisher confirm, consumer ACK и ACK приложения
+подтверждают разные этапы.
+end note
+@enduml

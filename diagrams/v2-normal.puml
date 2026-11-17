@@ -1,0 +1,47 @@
+@startuml v2-normal
+skinparam defaultFontName "Segoe UI"
+skinparam backgroundColor white
+skinparam sequenceMessageAlign center
+skinparam maxMessageSize 170
+skinparam ParticipantBackgroundColor #EAF2FB
+skinparam ParticipantBorderColor #3779B9
+skinparam ArrowColor #375C7E
+skinparam dpi 150
+hide footbox
+autonumber
+title Вариант 2: workflow доставки и подтверждение
+participant "API / relay /\ncallback API" as App
+database "БД платформы" as DB
+participant "Temporal /\nworkflow" as WF
+participant "Activity" as Act
+participant "Push-провайдер" as Push
+actor "Приложение\nклиента" as User
+
+App -> DB: Приёмка: notification + ledger + outbox
+DB --> App: COMMIT; только теперь 202 источнику
+App -> WF: StartWorkflow, ID = notification_id
+WF -> WF: История запуска сохранена в persistence
+WF --> App: Запуск подтверждён
+App -> DB: Отметить outbox
+WF -> Act: Отправить push, устойчивый attempt_id
+Act -> DB: DeliveryGate открыт? READY → SENDING
+DB --> Act: Разрешено
+Act -> Push: Отправить, ключ логической попытки
+Push --> Act: Принято, provider_message_id
+Act -> DB: Сохранить принятие провайдером
+Act --> WF: Принято, ожидаем подтверждение
+WF -> WF: Durable timer до 5 с от приёмки
+Push -> User: Push
+User -> App: ACK с notification_id
+App -> DB: Одна транзакция: inbox + DeliveryGate.stop_requested
+DB --> App: COMMIT
+App --> User: 2xx
+App -> WF: Relay: Signal с ключом callback
+WF -> WF: Дедупликация Signal, DELIVERED
+WF -> Act: Обновить проекцию и аудит
+Act -> DB: Идемпотентная запись результата
+note over DB, Act
+DeliveryGate закрывается до Signal.
+Отстающая проекция не разрешает отправки.
+end note
+@enduml

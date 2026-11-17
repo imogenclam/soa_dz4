@@ -1,0 +1,49 @@
+@startuml v2-failover
+skinparam defaultFontName "Segoe UI"
+skinparam backgroundColor white
+skinparam sequenceMessageAlign center
+skinparam maxMessageSize 170
+skinparam ParticipantBackgroundColor #EAF2FB
+skinparam ParticipantBorderColor #3779B9
+skinparam ArrowColor #375C7E
+skinparam dpi 150
+hide footbox
+autonumber
+title Вариант 2: таймер, восстановление Activity и SMS
+participant "Temporal /\nworkflow" as WF
+participant "Activity" as Act
+database "БД платформы" as DB
+participant "SMS-провайдер" as SMS
+participant "Callback API /\nrelay" as CB
+
+note over WF, Act: Push не получил ACK в пределах 5 секунд
+WF -> WF: Durable timer срабатывает
+WF -> Act: Подготовить SMS, устойчивый attempt_id
+Act -> DB: Проверить DeliveryGate; READY → SENDING
+DB --> Act: Разрешено
+Act -> SMS: Запрос с ключом логической попытки
+SMS --> Act: Принято
+Act -> Act: Worker падает до отчёта Temporal
+WF -> WF: Таймаут Activity, восстановление исполнения
+WF -> Act: Повтор той же Activity с тем же ключом
+Act -> DB: Проверить DeliveryGate и прежнюю попытку
+DB --> Act: SENDING / UNKNOWN
+alt Провайдер умеет status lookup или безопасный повтор
+  Act -> SMS: Узнать результат по прежнему ключу
+  SMS --> Act: Принято ранее, тот же provider_message_id
+  Act -> DB: Зафиксировать известный результат
+  Act --> WF: Ожидаем подтверждение прежней попытки
+else Результат выяснить нельзя
+  Act -> DB: UNKNOWN, без слепого повтора SMS
+  Act --> WF: Выбрать следующий канал по политике
+end
+SMS -> CB: Положительный delivery report, если SMS доставлена
+CB -> DB: Транзакция: inbox + DeliveryGate.stop_requested
+CB -> WF: Signal о доставке
+WF -> WF: DELIVERED, не назначать новые шаги
+note over Act, DB
+Ранее назначенная Activity тоже проверяет DeliveryGate.
+Закрытый gate запрещает новый READY → SENDING.
+Уже начавшийся внешний запрос отозвать нельзя.
+end note
+@enduml

@@ -1,0 +1,51 @@
+@startuml v1-container
+!include <C4/C4_Container>
+LAYOUT_LEFT_RIGHT()
+skinparam defaultFontName "Segoe UI"
+skinparam wrapWidth 180
+skinparam nodesep 35
+skinparam ranksep 55
+skinparam dpi 150
+UpdateLegendTitle("Легенда")
+UpdateElementStyle("person", $legendText="пользователь", $shape=RoundedBoxShape())
+UpdateElementStyle("container", $legendText="контейнер платформы", $shape=RoundedBoxShape())
+UpdateElementStyle("external_system", $legendText="внешняя система", $shape=RoundedBoxShape())
+UpdateBoundaryStyle("system", $type="проектируемая система", $legendText="граница платформы")
+title Вариант 1: координатор доставки (C4 Container)
+
+System_Ext(bank, "Сервисы банка", "Операция и outbox в одной транзакции")
+Person(client, "Клиент банка", "Получает сообщения, меняет настройки")
+System_Boundary(platform, "Notification Platform") {
+  Container(api, "API платформы", "Python, FastAPI", "Приём событий, настройки, история")
+  Container(coord, "Координатор доставки", "Python, asyncio", "Маршрут, таймеры, relay outbox, сверка")
+  Container(callback, "Приём подтверждений", "Python, FastAPI", "Проверяет ACK и delivery report")
+  ContainerDb(db, "Оперативная БД", "PostgreSQL, HA", "Обязательства, попытки, inbox, outbox, настройки")
+  ContainerQueue(critical, "Критичный брокер", "RabbitMQ, 3 узла", "Quorum queues, задания доставки")
+  ContainerQueue(bulk, "Массовый брокер", "RabbitMQ, 3 узла", "Сервисные сообщения и кампании")
+  Container(sender, "Критичные адаптеры", "Python, HTTPS", "Проверяют допуск, вызывают провайдеров")
+  Container(bulkSender, "Массовые адаптеры", "Python, HTTPS", "Отдельный пул и квоты")
+  ContainerDb(cache, "Кэш шаблонов", "Redis", "Версии шаблонов, TTL, необязателен")
+  ContainerDb(analytics, "Аналитика", "ClickHouse", "Асинхронная копия событий для отчётов")
+}
+System_Ext(providers, "Push / SMS / email", "FCM/APNs; по два SMS/email-провайдера")
+
+Rel(bank, api, "Передаёт событие с ключом", "HTTPS, синхронно")
+Rel(api, db, "Фиксирует до ответа 202", "SQL, транзакция")
+Rel(coord, db, "Состояние, outbox, таймеры", "SQL")
+Rel(coord, critical, "Публикует / получает задания", "AMQP, асинхронно")
+Rel(coord, bulk, "Публикует массовые задания", "AMQP, асинхронно")
+Rel(critical, sender, "Выдаёт задания", "AMQP, consumer ACK")
+Rel(bulk, bulkSender, "Выдаёт задания", "AMQP, consumer ACK")
+Rel(sender, db, "Проверяет допуск, сохраняет попытку", "SQL")
+Rel(bulkSender, db, "Проверяет настройки и попытку", "SQL")
+Rel(sender, cache, "Читает шаблон", "RESP, cache-aside")
+Rel(sender, providers, "Отправляет", "HTTPS")
+Rel(bulkSender, providers, "Отправляет в пределах квоты", "HTTPS")
+Rel(providers, callback, "Delivery report", "HTTPS, асинхронно")
+Rel(client, callback, "ACK приложения", "HTTPS, асинхронно")
+Rel(callback, db, "Фиксирует подтверждение и запрет новых попыток", "SQL, транзакция")
+Rel(providers, client, "Доставляет сообщение", "push / SMS / email")
+Rel(coord, analytics, "Выгружает события", "Асинхронно")
+
+SHOW_LEGEND()
+@enduml
